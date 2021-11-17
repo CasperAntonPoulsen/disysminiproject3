@@ -1,0 +1,26 @@
+
+syntax = "proto3";
+
+option go_package = "/proto";
+
+package proto;
+
+message Bid {
+    int32 userid = 1;
+    float amount = 2;
+}
+
+message Result {
+    float amount = 1;
+}
+
+message Acknowledgement {
+    string status = 1;
+}
+
+message Empty{}
+
+service Auction {
+    rpc RequestResult(Empty) returns (Result);
+    rpc MakeBid(Bid) returns (Acknowledgement);
+}
