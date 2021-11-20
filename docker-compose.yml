@@ -1,0 +1,31 @@
+version: '3'
+services:
+  auctionserver:
+    build:  
+      context: ./disysminiproject3
+      dockerfile: Dockerfile
+      args:
+        APPTYPE: server
+    env_file:
+      - server.env
+    ports:
+      - 8080:8080
+  frontend:
+    build:
+      context: ./disysminiproject3
+      dockerfile: Dockerfile
+      args:
+        APPTYPE: frontend
+    env_file:
+      - frontend.env
+    ports:
+      - 8080:8081
+  client:
+    build: 
+      context: ./distsminiproject3
+      dockerfile: Dockerfile
+      args:
+        APPTYPE: client
+    env_file:
+      - client.env
+      

@@ -15,21 +15,20 @@ type Server struct {
 }
 
 type Auction struct {
-	amount int32
+	amount   int32
+	bidderID int32
 }
-
-var port = flag.String("port", "", "port to serve the gprc server")
 
 func main() {
 	flag.Parse()
 	grpcServer := grpc.NewServer()
-	listener, err := net.Listen("tcp", *port)
+	listener, err := net.Listen("tcp", "localhost:8080")
 
 	if err != nil {
 		log.Fatalf("Error, couldn't create the server %v", err)
 	}
 
-	server := Server{auction: Auction{amount: 50}}
+	server := Server{auction: Auction{amount: 50, bidderID: 0}}
 
 	pb.RegisterAuctionServer(grpcServer, &server)
 	grpcServer.Serve(listener)
