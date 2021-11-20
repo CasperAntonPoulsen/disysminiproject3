@@ -5,13 +5,29 @@ option go_package = "/proto";
 
 package proto;
 
+message User {
+    int32 userid = 1;
+}
+
 message Bid {
     int32 userid = 1;
-    float amount = 2;
+    int32 amount = 2;
+}
+
+message Request {
+    User user = 1;
+}
+
+message Grant {
+    User user = 1;
+}
+
+message Release {
+    User user = 1;
 }
 
 message Result {
-    float amount = 1;
+    int32 amount = 1;
 }
 
 message Acknowledgement {
@@ -21,6 +37,8 @@ message Acknowledgement {
 message Empty{}
 
 service Auction {
-    rpc RequestResult(Empty) returns (Result);
+    rpc RequestResult(User) returns (Result);
     rpc MakeBid(Bid) returns (Acknowledgement);
+    rpc RequestToken(Request) returns (stream Grant); 
+    rpc ReleaseToken(Release) returns (Empty);
 }
