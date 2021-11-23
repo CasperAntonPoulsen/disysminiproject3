@@ -2,12 +2,18 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"net"
+	"os"
+	"strconv"
+	"time"
 
 	pb "github.com/CasperAntonPoulsen/disysminiproject3/proto"
 	"google.golang.org/grpc"
+)
+
+var (
+	client pb.AuctionClient
 )
 
 type Request struct {
@@ -20,10 +26,19 @@ type Auction struct {
 	bidderID int32
 }
 
+type ReplicationManager struct {
+	id         int32
+	port       string
+	connection pb.AuctionClient
+}
+
 type Server struct {
 	pb.UnimplementedAuctionServer
 	RequestQueue chan Request
 	Release      chan *pb.Release
+	Leader       ReplicationManager
+	RMs          []ReplicationManager
+	id           int32
 	error        chan error
 
 	auction Auction
@@ -61,7 +76,26 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 	s.auction.amount = bid.Amount
 	s.auction.bidderID = bid.Userid
 
+	if s.id == s.Leader.id {
+		s.broadcastBid(bid)
+	}
+
 	return &pb.Acknowledgement{Status: "success"}, nil
+}
+
+//write to other replicationmanagers (Servers)
+func (s *Server) broadcastBid(bid *pb.Bid) {
+	for _, rm := range s.RMs {
+		_, err := rm.connection.MakeBid(context.Background(), bid)
+		if err != nil {
+			log.Printf("could not connect to rm %v: %v", rm.id+1, err)
+		}
+
+	}
+}
+
+func (s *Server) Ping(ctx context.Context, empty *pb.Empty) (*pb.Empty, error) {
+	return empty, nil
 }
 
 func GrantToken(rqst Request) error {
@@ -70,20 +104,64 @@ func GrantToken(rqst Request) error {
 	return err
 }
 
+//helper function to convert string to int32
+func GetIntEnv(envvar string) int32 {
+	envvarstring := os.Getenv(envvar)
+	envvarint, err := strconv.Atoi(envvarstring)
+	if err != nil {
+		log.Fatalf("not a valid int: %v", err)
+	}
+
+	return int32(envvarint)
+}
+
 func main() {
-	flag.Parse()
+	//setup server
 	grpcServer := grpc.NewServer()
 	listener, err := net.Listen("tcp", ":8080")
 
 	if err != nil {
 		log.Fatalf("Error, couldn't create the server %v", err)
 	}
-
+	//make queues
 	requestqueue := make(chan Request)
 	releasequeue := make(chan *pb.Release)
+	//load variables from server.env
+	leaderid := GetIntEnv("DEFAULTLEADER")
+
+	id := GetIntEnv("ID")
+
+	NumRms := GetIntEnv("NREPLICATIONMANAGERS")
+
+	// construct list of all replication managers and their ports
+	var Rms []ReplicationManager
+
+	for i := 0; i < int(NumRms); i++ {
+
+		// does not include itself
+		if int32(i+1) == id {
+			continue
+		}
+		portInt := 8080 + i
+		port := ":" + strconv.Itoa(portInt)
+
+		conn, err := grpc.Dial("localhost"+port, grpc.WithInsecure())
+		if err != nil {
+			log.Printf("could not connect to rm %v: %v", i+1, err)
+		}
+
+		rmClient := pb.NewAuctionClient(conn)
+
+		Rms = append(Rms, ReplicationManager{id: int32(i + 1), port: port, connection: rmClient})
+	}
+
+	// construct server struct
 	server := Server{
 		RequestQueue: requestqueue,
 		Release:      releasequeue,
+		Leader:       ReplicationManager{id: leaderid, port: os.Getenv("DEFAULTLEADERPORT")},
+		id:           id,
+		RMs:          Rms,
 	}
 
 	// Initialize with a starting bid
@@ -102,5 +180,20 @@ func main() {
 			log.Printf("Release token recieved from: %v", release.User.Userid)
 		}
 	}()
+	//ping leader if not self leader
+	go func() {
+		for {
+			for _, rm := range server.RMs {
+				if rm.id == leaderid { //ping leader
+					_, err := rm.connection.Ping(context.Background(), &pb.Empty{})
+					if err != nil {
+						// start election
+					}
+				}
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
+
 	grpcServer.Serve(listener)
 }

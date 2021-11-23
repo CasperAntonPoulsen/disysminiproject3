@@ -41,4 +41,5 @@ service Auction {
     rpc MakeBid(Bid) returns (Acknowledgement);
     rpc RequestToken(Request) returns (stream Grant); 
     rpc ReleaseToken(Release) returns (Empty);
+    rpc Ping(Empty) returns (Empty);
 }
