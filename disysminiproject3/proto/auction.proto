@@ -6,7 +6,8 @@ option go_package = "/proto";
 package proto;
 
 message User {
-    int32 userid = 1;
+    int32 userid = 1; //¤ skal en user have lamport time, når vi skal broadcaste bids til andre replication managers
+    int32 time = 2;
 }
 
 message Bid {

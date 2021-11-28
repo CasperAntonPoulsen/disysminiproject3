@@ -26,9 +26,10 @@ type Auction struct {
 	bidderID int32
 }
 
-type ReplicationManager struct {
+type Replica struct {
 	id         int32
 	port       string
+	lamport    int32
 	connection pb.AuctionClient
 }
 
@@ -36,11 +37,11 @@ type Server struct {
 	pb.UnimplementedAuctionServer
 	RequestQueue chan Request
 	Release      chan *pb.Release
-	Leader       ReplicationManager
-	RMs          []ReplicationManager
+	Leader       Replica
+	Replicas          []Replica
 	id           int32
 	error        chan error
-
+	lamport    int32
 	auction Auction
 }
 
@@ -85,7 +86,7 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 
 //write to other replicationmanagers (Servers)
 func (s *Server) broadcastBid(bid *pb.Bid) {
-	for _, rm := range s.RMs {
+	for _, rm := range s.Replicas {
 		_, err := rm.connection.MakeBid(context.Background(), bid)
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", rm.id+1, err)
@@ -115,6 +116,55 @@ func GetIntEnv(envvar string) int32 {
 	return int32(envvarint)
 }
 
+//Election Method-----------------------------------------------------------------------------
+func CallElection(RmArr []Replica) {
+	//ask other RM's for their lamport-time ¤
+	max := CompareLamports(RmArr)
+	
+
+	//if lamport-time is less then self, do nothing ¤
+	if max[0] >  Server.lamport{
+	} else if max[0] <  Server.lamport{ //else if lamport-time more then all others, then make self leader, and message others that self is leader. ¤
+		//tell all others that self is the new leader ¤
+	} else { //else call election, to RM's with higher ID then self. ¤
+	for _, rm := range RmArr {
+		if rm.id > Server.id {
+			//if response, do nothing ¤
+			//if failure, make self leader, and broadcast to all others that self is leader ¤
+		}
+	}
+	}
+	
+	
+}
+
+func GetReplicaLamports(RArr []Replica) {
+	for _, rm := range RArr {
+		//ask for lamport time from replica ¤
+		//wait for response, and then update the replicas lamport time. ¤
+		rm.lamport = //insert lamporttime from replicamanager ¤
+	}
+}
+
+func CompareLamports(RmArr []Replica) []Replica {
+	maxLamport := int32(0)
+	managersWithMax := make([]Replica, len(RmArr))
+	for _, rm := range RmArr {
+		if rm.lamport > maxLamport {
+			maxLamport = rm.lamport
+		}
+	}
+
+	for _, rm := range RmArr {
+		if rm.lamport == maxLamport {
+			managersWithMax =  append(managersWithMax, rm)
+		}
+	}
+
+	return managersWithMax
+}
+
+//main----------------------------------------------------------------------------------------
 func main() {
 	//setup server
 	grpcServer := grpc.NewServer()
@@ -131,12 +181,12 @@ func main() {
 
 	id := GetIntEnv("ID")
 
-	NumRms := GetIntEnv("NREPLICATIONMANAGERS")
+	NumReplicas := GetIntEnv("NREPLICATIONMANAGERS")
 
-	// construct list of all replication managers and their ports
-	var Rms []ReplicationManager
+	// construct list of all Replica managers and their ports
+	var Replicas []Replica
 
-	for i := 0; i < int(NumRms); i++ {
+	for i := 0; i < int(NumReplicas); i++ {
 
 		// does not include itself
 		if int32(i+1) == id {
@@ -152,16 +202,16 @@ func main() {
 
 		rmClient := pb.NewAuctionClient(conn)
 
-		Rms = append(Rms, ReplicationManager{id: int32(i + 1), port: port, connection: rmClient})
+		Replicas = append(Replicas, Replica{id: int32(i + 1), port: port, connection: rmClient})
 	}
 
 	// construct server struct
 	server := Server{
 		RequestQueue: requestqueue,
 		Release:      releasequeue,
-		Leader:       ReplicationManager{id: leaderid, port: os.Getenv("DEFAULTLEADERPORT")},
+		Leader:       Replica{id: leaderid, port: os.Getenv("DEFAULTLEADERPORT")},
 		id:           id,
-		RMs:          Rms,
+		Replicas:          Replicas,
 	}
 
 	// Initialize with a starting bid
@@ -183,11 +233,13 @@ func main() {
 	//ping leader if not self leader
 	go func() {
 		for {
-			for _, rm := range server.RMs {
+			for _, rm := range server.Replicas {
 				if rm.id == leaderid { //ping leader
 					_, err := rm.connection.Ping(context.Background(), &pb.Empty{})
+					//If we get a resonse error, we assume that the server has crash failure ¤
 					if err != nil {
-						// start election
+						// start election ¤
+						CallElection(server.Replicas)
 					}
 				}
 			}
