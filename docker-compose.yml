@@ -8,6 +8,7 @@ services:
         APPTYPE: server
     env_file:
       - server.env
+      - .env
     environment:
       - ID=1
     ports:
@@ -20,6 +21,7 @@ services:
         APPTYPE: server
     env_file:
       - server.env
+      - .env
     environment:
       - ID=2
     ports:
@@ -32,6 +34,7 @@ services:
         APPTYPE: server
     env_file:
       - server.env
+      - .env
     environment:
       - ID=3
     ports:
@@ -44,5 +47,6 @@ services:
         APPTYPE: frontend
     env_file:
       - frontend.env
+      - .env
     ports:
       - 8080:8000

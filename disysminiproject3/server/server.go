@@ -12,10 +12,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-var (
-	client pb.AuctionClient
-)
-
 type Request struct {
 	user   *pb.User
 	stream pb.Auction_RequestTokenServer
@@ -27,9 +23,8 @@ type Auction struct {
 }
 
 type Replica struct {
-	id         int32
+	user       *pb.User
 	port       string
-	lamport    int32
 	connection pb.AuctionClient
 }
 
@@ -38,11 +33,12 @@ type Server struct {
 	RequestQueue chan Request
 	Release      chan *pb.Release
 	Leader       Replica
-	Replicas          []Replica
+	Replicas     []Replica
 	id           int32
 	error        chan error
-	lamport    int32
-	auction Auction
+	lamport      int32
+	auction      Auction
+	timeout      int32
 }
 
 func (s *Server) RequestToken(rqst *pb.Request, stream pb.Auction_RequestTokenServer) error {
@@ -77,7 +73,7 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 	s.auction.amount = bid.Amount
 	s.auction.bidderID = bid.Userid
 
-	if s.id == s.Leader.id {
+	if s.id == s.Leader.user.Userid {
 		s.broadcastBid(bid)
 	}
 
@@ -87,9 +83,13 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 //write to other replicationmanagers (Servers)
 func (s *Server) broadcastBid(bid *pb.Bid) {
 	for _, rm := range s.Replicas {
-		_, err := rm.connection.MakeBid(context.Background(), bid)
+
+		d := time.Duration(GetIntEnv("GLOBALTIMEOUT")) * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), d)
+		defer cancel()
+		_, err := rm.connection.MakeBid(ctx, bid)
 		if err != nil {
-			log.Printf("could not connect to rm %v: %v", rm.id+1, err)
+			log.Printf("could not connect to rm %v: %v", rm.user.Userid+1, err)
 		}
 
 	}
@@ -116,52 +116,46 @@ func GetIntEnv(envvar string) int32 {
 	return int32(envvarint)
 }
 
+func (s *Server) RequestLamport(ctx context.Context, empty *pb.Empty) (*pb.User, error) {
+	return &pb.User{Userid: s.id, Time: s.lamport}, nil
+}
+
 //Election Method-----------------------------------------------------------------------------
-func CallElection(RmArr []Replica) {
-	//ask other RM's for their lamport-time ¤
-	max := CompareLamports(RmArr)
-	
+func (s *Server) CompareLamports() {
+	for _, rm := range s.Replicas {
+		usr, err := rm.connection.RequestLamport(context.Background(), &pb.Empty{})
 
-	//if lamport-time is less then self, do nothing ¤
-	if max[0] >  Server.lamport{
-	} else if max[0] <  Server.lamport{ //else if lamport-time more then all others, then make self leader, and message others that self is leader. ¤
-		//tell all others that self is the new leader ¤
-	} else { //else call election, to RM's with higher ID then self. ¤
-	for _, rm := range RmArr {
-		if rm.id > Server.id {
-			//if response, do nothing ¤
-			//if failure, make self leader, and broadcast to all others that self is leader ¤
+		if err != nil {
+			log.Printf("Replica did not respond within the given time %v", err)
+		}
+
+		if usr.Time > s.lamport {
+			return
+		} else if usr.Userid > s.id {
+			return
 		}
 	}
+
+	leaderState := &pb.State{User: &pb.User{Userid: s.id, Time: s.lamport}, Amount: s.auction.amount, Bidid: s.auction.bidderID}
+	for _, rm := range s.Replicas {
+		_, err := rm.connection.Coordinator(context.Background(), leaderState)
+		if err != nil {
+			log.Printf("Replica did not respond within the given time %v", err)
+		}
 	}
-	
-	
+	s.Leader = Replica{user: leaderState.User}
 }
 
-func GetReplicaLamports(RArr []Replica) {
-	for _, rm := range RArr {
-		//ask for lamport time from replica ¤
-		//wait for response, and then update the replicas lamport time. ¤
-		rm.lamport = //insert lamporttime from replicamanager ¤
-	}
-}
-
-func CompareLamports(RmArr []Replica) []Replica {
-	maxLamport := int32(0)
-	managersWithMax := make([]Replica, len(RmArr))
-	for _, rm := range RmArr {
-		if rm.lamport > maxLamport {
-			maxLamport = rm.lamport
+func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Empty, error) {
+	s.Leader.user = leaderState.User
+	for _, rm := range s.Replicas {
+		if rm.user.Userid == s.Leader.user.Userid {
+			s.Leader.port = rm.port
+			s.Leader.connection = rm.connection
 		}
 	}
-
-	for _, rm := range RmArr {
-		if rm.lamport == maxLamport {
-			managersWithMax =  append(managersWithMax, rm)
-		}
-	}
-
-	return managersWithMax
+	s.auction = Auction{bidderID: leaderState.Bidid, amount: leaderState.Amount}
+	return &pb.Empty{}, nil
 }
 
 //main----------------------------------------------------------------------------------------
@@ -202,16 +196,17 @@ func main() {
 
 		rmClient := pb.NewAuctionClient(conn)
 
-		Replicas = append(Replicas, Replica{id: int32(i + 1), port: port, connection: rmClient})
+		Replicas = append(Replicas, Replica{&pb.User{Userid: int32(i + 1)}, port, rmClient})
 	}
 
 	// construct server struct
 	server := Server{
 		RequestQueue: requestqueue,
 		Release:      releasequeue,
-		Leader:       Replica{id: leaderid, port: os.Getenv("DEFAULTLEADERPORT")},
+		Leader:       Replica{user: &pb.User{Userid: leaderid}, port: os.Getenv("DEFAULTLEADERPORT")},
 		id:           id,
-		Replicas:          Replicas,
+		Replicas:     Replicas,
+		timeout:      GetIntEnv("GLOBALTIMEOUT"),
 	}
 
 	// Initialize with a starting bid
@@ -234,12 +229,12 @@ func main() {
 	go func() {
 		for {
 			for _, rm := range server.Replicas {
-				if rm.id == leaderid { //ping leader
+				if rm.user.Userid == leaderid { //ping leader
 					_, err := rm.connection.Ping(context.Background(), &pb.Empty{})
 					//If we get a resonse error, we assume that the server has crash failure ¤
 					if err != nil {
 						// start election ¤
-						CallElection(server.Replicas)
+						server.CompareLamports()
 					}
 				}
 			}
