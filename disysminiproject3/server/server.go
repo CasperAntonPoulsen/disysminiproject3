@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"net"
 	"os"
@@ -11,6 +12,8 @@ import (
 	pb "github.com/CasperAntonPoulsen/disysminiproject3/proto"
 	"google.golang.org/grpc"
 )
+
+var port = flag.String("port", "8080", "The docker port of the server")
 
 type Request struct {
 	user   *pb.User
@@ -39,6 +42,7 @@ type Server struct {
 	lamport      int32
 	auction      Auction
 	timeout      int32
+	frontend     pb.AuctionClient
 }
 
 func (s *Server) RequestToken(rqst *pb.Request, stream pb.Auction_RequestTokenServer) error {
@@ -59,7 +63,7 @@ func (s *Server) ReleaseToken(ctx context.Context, release *pb.Release) (*pb.Emp
 	return &pb.Empty{}, nil
 }
 
-func (s *Server) RequestResult(ctx context.Context, user *pb.User) (*pb.Result, error) {
+func (s *Server) RequestResult(ctx context.Context, empty *pb.Empty) (*pb.Result, error) {
 
 	return &pb.Result{Amount: s.auction.amount}, nil
 }
@@ -70,12 +74,14 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 		return &pb.Acknowledgement{Status: "fail"}, nil
 	}
 
-	s.auction.amount = bid.Amount
-	s.auction.bidderID = bid.Userid
-
 	if s.id == s.Leader.user.Userid {
 		s.broadcastBid(bid)
 	}
+	log.Print("Proccessing bid")
+	s.auction.amount = bid.Amount
+	s.auction.bidderID = bid.Userid
+
+	s.lamport++
 
 	return &pb.Acknowledgement{Status: "success"}, nil
 }
@@ -84,10 +90,7 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 func (s *Server) broadcastBid(bid *pb.Bid) {
 	for _, rm := range s.Replicas {
 
-		d := time.Duration(GetIntEnv("GLOBALTIMEOUT")) * time.Second
-		ctx, cancel := context.WithTimeout(context.Background(), d)
-		defer cancel()
-		_, err := rm.connection.MakeBid(ctx, bid)
+		_, err := rm.connection.MakeBid(context.Background(), bid)
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", rm.user.Userid+1, err)
 		}
@@ -127,13 +130,14 @@ func (s *Server) CompareLamports() {
 
 		if err != nil {
 			log.Printf("Replica did not respond within the given time %v", err)
+		} else {
+			if usr.Time > s.lamport {
+				return
+			} else if usr.Userid > s.id {
+				return
+			}
 		}
 
-		if usr.Time > s.lamport {
-			return
-		} else if usr.Userid > s.id {
-			return
-		}
 	}
 
 	leaderState := &pb.State{User: &pb.User{Userid: s.id, Time: s.lamport}, Amount: s.auction.amount, Bidid: s.auction.bidderID}
@@ -144,6 +148,12 @@ func (s *Server) CompareLamports() {
 		}
 	}
 	s.Leader = Replica{user: leaderState.User}
+
+	// tell frontend you're the new leader
+	_, err := s.frontend.Coordinator(context.Background(), leaderState)
+	if err != nil {
+		log.Printf("Could not contanct frontend: %v", err)
+	}
 }
 
 func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Empty, error) {
@@ -160,9 +170,12 @@ func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Em
 
 //main----------------------------------------------------------------------------------------
 func main() {
+	flag.Parse()
+
 	//setup server
 	grpcServer := grpc.NewServer()
-	listener, err := net.Listen("tcp", ":8080")
+	log.Print("Starting listener")
+	listener, err := net.Listen("tcp", ":"+*port)
 
 	if err != nil {
 		log.Fatalf("Error, couldn't create the server %v", err)
@@ -189,14 +202,22 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		conn, err := grpc.Dial("localhost"+port, grpc.WithInsecure())
+		log.Printf("Connecting to Replica")
+		conn, err := grpc.Dial("auctionserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
 		}
-
+		log.Printf("Connected to Replica: %v", i+1)
 		rmClient := pb.NewAuctionClient(conn)
 
 		Replicas = append(Replicas, Replica{&pb.User{Userid: int32(i + 1)}, port, rmClient})
+	}
+
+	//Connect to the frontend
+
+	frontend, err := grpc.Dial("frontend:8001", grpc.WithInsecure())
+	if err != nil {
+		log.Printf("could not connect: %v", err)
 	}
 
 	// construct server struct
@@ -207,6 +228,7 @@ func main() {
 		id:           id,
 		Replicas:     Replicas,
 		timeout:      GetIntEnv("GLOBALTIMEOUT"),
+		frontend:     pb.NewAuctionClient(frontend),
 	}
 
 	// Initialize with a starting bid
@@ -229,16 +251,19 @@ func main() {
 	go func() {
 		for {
 			for _, rm := range server.Replicas {
-				if rm.user.Userid == leaderid { //ping leader
+				if rm.user.Userid == server.Leader.user.Userid { //ping leader
+					time.Sleep(5 * time.Second)
+					log.Printf("Pinging leader: %v", server.Leader.user.Userid)
 					_, err := rm.connection.Ping(context.Background(), &pb.Empty{})
+
 					//If we get a resonse error, we assume that the server has crash failure ¤
 					if err != nil {
 						// start election ¤
+						log.Printf("Leader did not respond, starting comparison")
 						server.CompareLamports()
 					}
 				}
 			}
-			time.Sleep(5 * time.Second)
 		}
 	}()
 

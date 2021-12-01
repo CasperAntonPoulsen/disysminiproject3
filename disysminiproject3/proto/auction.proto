@@ -44,7 +44,7 @@ message State {
 message Empty{}
 
 service Auction {
-    rpc RequestResult(User) returns (Result);
+    rpc RequestResult(Empty) returns (Result);
     rpc MakeBid(Bid) returns (Acknowledgement);
     rpc RequestToken(Request) returns (stream Grant); 
     rpc ReleaseToken(Release) returns (Empty);

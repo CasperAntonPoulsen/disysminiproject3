@@ -6,6 +6,7 @@ services:
       dockerfile: Dockerfile
       args:
         APPTYPE: server
+        PORT: 8080
     env_file:
       - server.env
       - .env
@@ -19,34 +20,38 @@ services:
       dockerfile: Dockerfile
       args:
         APPTYPE: server
+        PORT: 8081
     env_file:
       - server.env
       - .env
     environment:
       - ID=2
     ports:
-      - 8080:8081
+      - 8081:8081
   auctionserver3:
     build:  
       context: ./disysminiproject3
       dockerfile: Dockerfile
       args:
         APPTYPE: server
+        PORT: 8082
     env_file:
       - server.env
       - .env
     environment:
       - ID=3
     ports:
-      - 8080:8082
+      - 8082:8082
   frontend:
     build:
       context: ./disysminiproject3
       dockerfile: Dockerfile
       args:
         APPTYPE: frontend
+        PORT: 8000
     env_file:
       - frontend.env
       - .env
     ports:
-      - 8080:8000
+      - 8000:8000
+      - 8001:8001
