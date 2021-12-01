@@ -5,17 +5,40 @@ option go_package = "/proto";
 
 package proto;
 
+message User {
+    int32 userid = 1; //¤ skal en user have lamport time, når vi skal broadcaste bids til andre replication managers
+    int32 time = 2;
+}
+
 message Bid {
     int32 userid = 1;
-    float amount = 2;
+    int32 amount = 2;
+}
+
+message Request {
+    User user = 1;
+}
+
+message Grant {
+    User user = 1;
+}
+
+message Release {
+    User user = 1;
 }
 
 message Result {
-    float amount = 1;
+    int32 amount = 1;
 }
 
 message Acknowledgement {
     string status = 1;
+}
+
+message State {
+    User user = 1;
+    int32 bidid = 2;
+    int32 amount = 3;
 }
 
 message Empty{}
@@ -23,4 +46,9 @@ message Empty{}
 service Auction {
     rpc RequestResult(Empty) returns (Result);
     rpc MakeBid(Bid) returns (Acknowledgement);
+    rpc RequestToken(Request) returns (stream Grant); 
+    rpc ReleaseToken(Release) returns (Empty);
+    rpc Ping(Empty) returns (Empty);
+    rpc Coordinator(State) returns (Empty);
+    rpc RequestLamport(Empty) returns (User);
 }
