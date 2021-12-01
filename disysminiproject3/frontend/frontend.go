@@ -45,6 +45,9 @@ func (s *Server) FEMakeBid(c *gin.Context) {
 		})
 		return
 	}
+
+	log.Printf("Processing bid from: %v, of amount: %v", userid, amount)
+
 	rqst := &pb.Request{User: &pb.User{Userid: int32(userid)}}
 	bid := &pb.Bid{Userid: int32(userid), Amount: int32(amount)}
 
@@ -77,7 +80,7 @@ func (s *Server) FEMakeBid(c *gin.Context) {
 			c.JSON(200, gin.H{
 				"ack": ack.Status,
 			})
-
+			log.Print("Succesfully processed bid")
 			log.Print("Finished, sending release token")
 			// then release
 			s.leader.connection.ReleaseToken(context.Background(), &pb.Release{User: rqst.User})
@@ -89,6 +92,7 @@ func (s *Server) FEMakeBid(c *gin.Context) {
 
 func (s *Server) FERequestResult(c *gin.Context) {
 
+	log.Print("Getting current bid")
 	rqst := &pb.Request{User: &pb.User{Userid: 0}}
 
 	stream, err := s.leader.connection.RequestToken(context.Background(), rqst)
@@ -120,6 +124,8 @@ func (s *Server) FERequestResult(c *gin.Context) {
 				return
 			}
 
+			log.Printf("Result: %v", result)
+
 			c.String(http.StatusOK, strconv.Itoa(int(result.Amount)))
 
 			log.Print("Finished, sending release token")
@@ -137,6 +143,7 @@ func (s *Server) Coordinator(ctx context.Context, state *pb.State) (*pb.Empty, e
 			s.leader = rm
 		}
 	}
+	log.Printf("Recivied new leader: %v", s.leader.user.Userid)
 	return &pb.Empty{}, nil
 }
 
@@ -168,7 +175,6 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		log.Printf("Connecting to Replica")
 		conn, err := grpc.Dial("auctionserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
@@ -191,6 +197,6 @@ func main() {
 	r.POST("/bid", server.FEMakeBid)
 
 	go func() { grpcServer.Serve(listener) }()
-
+	log.Print("API listening at :8000")
 	r.Run(":8000")
 }

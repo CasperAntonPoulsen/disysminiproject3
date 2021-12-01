@@ -65,6 +65,7 @@ func (s *Server) ReleaseToken(ctx context.Context, release *pb.Release) (*pb.Emp
 
 func (s *Server) RequestResult(ctx context.Context, empty *pb.Empty) (*pb.Result, error) {
 
+	log.Print("Reading the result")
 	return &pb.Result{Amount: s.auction.amount}, nil
 }
 
@@ -73,16 +74,16 @@ func (s *Server) MakeBid(ctx context.Context, bid *pb.Bid) (*pb.Acknowledgement,
 	if bid.Amount <= s.auction.amount {
 		return &pb.Acknowledgement{Status: "fail"}, nil
 	}
-
+	log.Print("Proccessing bid")
 	if s.id == s.Leader.user.Userid {
 		s.broadcastBid(bid)
 	}
-	log.Print("Proccessing bid")
+
 	s.auction.amount = bid.Amount
 	s.auction.bidderID = bid.Userid
 
 	s.lamport++
-
+	log.Print("Bid complete")
 	return &pb.Acknowledgement{Status: "success"}, nil
 }
 
@@ -129,11 +130,13 @@ func (s *Server) CompareLamports() {
 		usr, err := rm.connection.RequestLamport(context.Background(), &pb.Empty{})
 
 		if err != nil {
-			log.Printf("Replica did not respond within the given time %v", err)
+			log.Printf("Replica %v did not respond within the given time %v", rm.user.Userid, err)
 		} else {
 			if usr.Time > s.lamport {
+				log.Printf("Replica %v has newer version of the auction", rm.user.Userid)
 				return
 			} else if usr.Userid > s.id {
+				log.Printf("Replica %v has higher id", rm.user.Userid)
 				return
 			}
 		}
@@ -144,11 +147,11 @@ func (s *Server) CompareLamports() {
 	for _, rm := range s.Replicas {
 		_, err := rm.connection.Coordinator(context.Background(), leaderState)
 		if err != nil {
-			log.Printf("Replica did not respond within the given time %v", err)
+			log.Printf("Replica %v did not respond within the given time %v", rm.user.Userid, err)
 		}
 	}
 	s.Leader = Replica{user: leaderState.User}
-
+	log.Printf("Electing myself as leader")
 	// tell frontend you're the new leader
 	_, err := s.frontend.Coordinator(context.Background(), leaderState)
 	if err != nil {
@@ -165,6 +168,7 @@ func (s *Server) Coordinator(ctx context.Context, leaderState *pb.State) (*pb.Em
 		}
 	}
 	s.auction = Auction{bidderID: leaderState.Bidid, amount: leaderState.Amount}
+	log.Printf("Recieved new leader: %v", s.Leader.user.Userid)
 	return &pb.Empty{}, nil
 }
 
@@ -202,7 +206,6 @@ func main() {
 		portInt := 8080 + i
 		port := ":" + strconv.Itoa(portInt)
 
-		log.Printf("Connecting to Replica")
 		conn, err := grpc.Dial("auctionserver"+strconv.Itoa(i+1)+port, grpc.WithInsecure())
 		if err != nil {
 			log.Printf("could not connect to rm %v: %v", i+1, err)
